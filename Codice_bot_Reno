@@ -1,0 +1,301 @@
+import requests
+from telegram import ReplyKeyboardMarkup
+from telegram.ext import Updater, CommandHandler
+from telegram.ext import CommandHandler
+
+TOKEN = "7239577208:AAHNG21DvMmHtgvEfm1Efpynqvy3IV0qlaU"
+
+API_URL1 = "https://allertameteo.regione.emilia-romagna.it/o/api/allerta/get-time-series/?stazione=3106&variabile=1,0,900/1,-,-,-/B13011"
+API_URL2 = "https://allertameteo.regione.emilia-romagna.it/o/api/allerta/get-time-series/?stazione=3095&variabile=254,0,0/1,-,-,-/B13215"
+API_URL3 = "https://allertameteo.regione.emilia-romagna.it/o/api/allerta/get-time-series/?stazione=14101&variabile=254,0,0/1,-,-,-/B10004"
+API_TEMP = "https://api.openweathermap.org/data/2.5/weather?q=Casalecchio%20di%20Reno,IT&appid=d4f57f142e305dd5a45eb6b517d4eacb&units=metric&lang=it"
+API_WIND = "https://api.openweathermap.org/data/2.5/weather?q=Casalecchio%20di%20Reno,IT&appid=d4f57f142e305dd5a45eb6b517d4eacb&units=metric&lang=it"
+API_HUMIDITY = "https://api.openweathermap.org/data/2.5/weather?q=Casalecchio%20di%20Reno,IT&appid=d4f57f142e305dd5a45eb6b517d4eacb&units=metric&lang=it"
+API_RAINCIMONE = "https://allertameteo.regione.emilia-romagna.it/o/api/allerta/get-time-series/?stazione=5392&variabile=1,0,900/1,-,-,-/B13011"
+API_FORECAST = "https://api.open-meteo.com/v1/meteofrance?latitude=44.48&longitude=11.28&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max&timezone=Europe/Rome"
+API_AURORA = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
+
+def kp_to_storm_level(kp):
+    """Converte indice Kp in livello di tempesta geomagnetica"""
+    if kp < 5:
+        return "—"
+    elif kp < 6:
+        return "G1"
+    elif kp < 7:
+        return "G2"
+    elif kp < 8:
+        return "G3"
+    elif kp < 9:
+        return "G4"
+    else:
+        return "G5"
+
+def aurora(update, context):
+    try:
+        response = requests.get(API_AURORA, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        # Il primo elemento è l'intestazione
+        values = data[1:]
+
+        # Ultimo dato disponibile
+        ultimo_tempo, ultimo_kp = values[-1][0], float(values[-1][1])
+        scala = kp_to_storm_level(ultimo_kp)
+
+        messaggio = (
+            "🌌 *Indice Kp geomagnetico NOAA*\n"
+            "--------------------------------\n"
+            f"🕒 Ultimo dato: {ultimo_tempo} UTC\n"
+            f"📈 Kp attuale: {ultimo_kp:.2f}\n"
+            f"🌍 Scala NOAA: {scala}\n\n"
+            "📅 *Previsione prossimi 3 giorni:*\n"
+        )
+
+        # Mostra previsioni future (esclude l'ultimo dato, che è "attuale")
+        from datetime import datetime, timedelta
+
+        now = datetime.utcnow()
+        future_data = [
+            (datetime.strptime(entry[0], "%Y-%m-%d %H:%M:%S"), float(entry[1]))
+            for entry in values
+        ]
+        # Filtra solo dati dopo "adesso" e nei prossimi 3 giorni
+        fine = now + timedelta(days=3)
+        future_data = [x for x in future_data if now < x[0] <= fine]
+
+        for dt, kp in future_data:
+            messaggio += f"• {dt.strftime('%Y-%m-%d %H:%M:%S')} → Kp {kp:.2f} ({kp_to_storm_level(kp)})\n"
+
+        update.message.reply_text(messaggio, parse_mode="Markdown")
+
+    except Exception as e:
+        print("Errore aurora:", e)
+        update.message.reply_text("❌ Errore nel recupero dei dati NOAA.")
+
+# Soglie
+SOGLIA_GIALLA = (0.80, 1.60)
+SOGLIA_ARANCIONE = (1.60, 2.20)
+SOGLIA_ROSSA = (2.rom telegram import ReplyKeyboardMarkup
+from telegram.ext import Updater, CommandHandler
+from telegram.ext i20, float("inf"))
+
+# Variabile per ricordare l’ultima soglia inviata
+ultima_soglia = None
+
+def alert_reno(update, context):
+    global ultima_soglia
+
+    try:
+        response = requests.get(API_URL2, timeout=10)
+        data = response.json()
+        livello = float(data["data"]["timeSeries"]["values"][-1]["value"])
+
+        soglia_corrente = None
+        messaggio = f"🌊 Livello attuale del Reno: {livello:.2f} m\n"
+
+        if SOGLIA_GIALLA[0] <= livello < SOGLIA_GIALLA[1]:
+            soglia_corrente = "gialla"
+            messaggio += "🟡 Attenzione: fiume Reno in soglia GIALLO 🟡"
+        elif SOGLIA_ARANCIONE[0] <= livello < SOGLIA_ARANCIONE[1]:
+            soglia_corrente = "arancione"
+            messaggio += "⚠️🟠 Attenzione: fiume Reno in soglia ARANCIONE 🟠⚠️"
+        elif livello >= SOGLIA_ROSSA[0]:
+            soglia_corrente = "rossa"
+            messaggio += "⚠️🔴 Attenzione: fiume Reno in soglia ROSSA 🔴⚠️"
+        else:
+            soglia_corrente = "normale"
+            messaggio += "✅ Fiume sotto soglia."
+
+        update.message.reply_text(messaggio)
+
+        # Se vuoi che il bot invii automaticamente l'avviso solo quando cambia soglia:
+        if soglia_corrente != ultima_soglia and soglia_corrente != "normale":
+            context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=messaggio
+            )
+            ultima_soglia = soglia_corrente
+
+    except Exception as e:
+        update.message.reply_text("❌ Errore nel recupero del livello del Reno.")
+        print("Errore:", e)
+
+def forecast_tomorrow(update, context):
+    try:
+        resp = requests.get(API_FORECAST, timeout=5)
+        resp.raise_for_status()
+        daily = resp.json()["daily"]
+
+        # indice 1 = giorno dopo
+        i = 1
+        msg = (
+            f" Previsioni per il {daily['time'][i]} \n -------------------------"
+            f" Temperatura Max: {daily['temperature_2m_max'][i]} °C\n"
+            f" Temperatura Min: {daily['temperature_2m_min'][i]} °C\n"
+            f" Pioggia: {daily['precipitation_sum'][i]} mm\n"
+            f" Vento massimo: {daily['wind_speed_10m_max'][i]} km/h"
+        )
+
+        update.message.reply_text(msg)
+
+    except Exception as e:
+        update.message.reply_text("Errore nel recupero delle previsioni.")
+
+def raincimone(update, context):
+    response = requests.get(API_RAINCIMONE)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati:
+            ultimo = dati[-1]  # prendi l'ultimo elemento della lista
+            if ultimo.get('v') is not None:
+                update.message.reply_text(f"{float(ultimo['v']):.1f} mm")
+            else:
+                update.message.reply_text("Ultimo dato non disponibile.")
+        else:
+            update.message.reply_text("Nessun dato disponibile.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def humidity(update, context):
+    response = requests.get(API_HUMIDITY)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati.get('main') and 'humidity' in dati['main']:
+            hum = dati['main']['humidity']
+            update.message.reply_text(f"{hum}%")
+        else:
+            update.message.reply_text("Dati umidità non disponibili.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def wind(update, context):
+    response = requests.get(API_WIND)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati and 'wind' in dati:
+            wind_speed_kmh = round(dati['wind']['speed'] * 3.6, 1)  # m/s -> km/h
+            update.message.reply_text(f"{wind_speed_kmh} km/h")
+        else:
+            update.message.reply_text("Nessun dato disponibile.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def temperature(update, context):
+    response = requests.get(API_TEMP)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati and 'main' in dati:
+            temp = round(dati['main']['temp'], 1)
+            update.message.reply_text(f"{temp}°C")
+        else:
+            update.message.reply_text("Nessun dato disponibile.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def rain(update, context):
+    response = requests.get(API_URL1)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati:
+            totale_pioggia = sum(float(d['v']) for d in dati if d.get('v') is not None)
+            update.message.reply_text(f"{totale_pioggia:.1f} mm")
+        else:
+            update.message.reply_text("Nessun dato disponibile.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def reno(update, context):
+    response = requests.get(API_URL2)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati:
+            ultimo_valore = dati[-1]['v']
+            update.message.reply_text(f"{ultimo_valore} m")
+        else:
+            update.message.reply_text("Nessun dato disponibile.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def pressure(update, context):
+    response = requests.get(API_URL3)
+    if response.status_code == 200:
+        dati = response.json()
+        if dati:
+            ultimo_valore = float(dati[-1]['v'])/100.0
+            update.message.reply_text(f"{ultimo_valore} hPa")
+        else:
+            update.message.reply_text("Nessun dato disponibile.")
+    else:
+        update.message.reply_text("Errore nel recupero dati.")
+
+def all(update, context):
+    try:
+        temp_resp = requests.get(API_TEMP).json()
+        rain_resp = requests.get(API_URL1).json()
+        reno_resp = requests.get(API_URL2).json()
+        press_resp = requests.get(API_URL3).json()
+        hum_resp = requests.get(API_HUMIDITY).json()
+        wind_resp =  requests.get(API_WIND).json()
+
+        temp = round(temp_resp['main']['temp'], 1)
+        hum = temp_resp['main']['humidity']
+        wind_speed_kmh = round(temp_resp['wind']['speed'] * 3.6, 1)
+        pressione = float(press_resp[-1]['v']) / 100.0
+        livello_reno = reno_resp[-1]['v']
+        pioggia = sum(float(d['v']) for d in rain_resp if d.get('v') is not None)
+
+        update.message.reply_text(
+            f" Dati meteo Casalecchio di Reno:\n\n"
+            f" Pioggia ultimi 3 giorni: {pioggia:.1f} mm\n"
+            f" Livello Reno: {livello_reno} m\n"
+            f" Pressione: {pressione:.1f} hPa\n"
+            f" Temperatura: {temp}°C\n"
+            f" Vento: {wind_speed_kmh} km/h\n"
+            f" Umidità: {hum}%\n"
+        )
+    except Exception as e:
+        update.message.reply_text("Errore nel recupero dei dati.")
+
+def menu(update, context):
+    keyboard = [
+        ["/all", "/forecast_tomorrow", "/aurora", "/rain", "/reno"],
+        ["/pressure", "/temp", "/wind", "/humidity", "/raincimone"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    update.message.reply_text("Scegli un comando:", reply_markup=reply_markup)
+
+
+if __name__ == '__main__':
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("all", all))
+    dp.add_handler(CommandHandler("forecast_tomorrow", forecast_tomorrow))
+    dp.add_handler(CommandHandler("aurora", aurora)),
+    dp.add_handler(CommandHandler("rain", rain))
+    dp.add_handler(CommandHandler("reno", reno))
+    dp.add_handler(CommandHandler("pressure", pressure))
+    dp.add_handler(CommandHandler("temperature", temperature))
+    dp.add_handler(CommandHandler("wind", wind))
+    dp.add_handler(CommandHandler("humidity", humidity))
+    dp.add_handler(CommandHandler("raincimone", raincimone))
+
+
+    # SETTO I COMANDI DEL BOT (menu azzurro in basso)
+    updater.bot.set_my_commands([
+        ('all', 'Tutti i dati per Casalecchio'),
+        ('forecast_tomorrow', 'Previsioni meteo per domani'),
+        ('aurora', 'Indice Kp'),
+        ('rain', 'Dati pioggia ultimi 3 giorni'),
+        ('reno', 'Dati livello idrometrico Reno a Casalecchio Chiusa'),
+        ('pressure', 'Dati pressione'),
+        ('temperature', 'Dati temperatura'),
+        ('wind', 'Velocità media del vento'),
+        ('humidity', 'Dati umidità'),
+        ('raincimone', 'Dati pioggia Cimone su 15 minuti')
+    ])
+
+    print("Bot avviato...")
+    updater.start_polling()
+    updater.idle()
